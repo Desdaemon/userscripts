@@ -10,11 +10,13 @@
 // @supportURL   https://github.com/Desdaemon/userscripts
 // @downloadURL  https://raw.githubusercontent.com/Desdaemon/userscripts/refs/heads/main/greasemonkey/yno/shader.user.js
 // @updateURL    https://raw.githubusercontent.com/Desdaemon/userscripts/refs/heads/main/greasemonkey/yno/shader.user.js
-// @grant        none
+// @resource     guestLUT https://github.com/libretro/slang-shaders/blob/master/crt/shaders/guest/advanced/lut/ntsc-lut.png?raw=true
+// @resource     hyllianLUT https://github.com/libretro/slang-shaders/blob/master/crt/shaders/hyllian/support/LUT/some-grade.png?raw=true
+// @grant        GM_getResourceURL
 // ==/UserScript==
 
 async function awaitInit() {
-  while (!window.loadOrInitConfig)
+  while (!unsafeWindow.loadOrInitConfig)
     await new Promise(resolve => setTimeout(resolve, 3000));
 }
 
@@ -22,7 +24,7 @@ async function awaitInit() {
   'use strict';
   if (!initDone)
     return awaitInit().then(() => runShaders(true));
-  const gl = canvas.getContext('webgl');
+  const gl = canvas.getContext('webgl', { antialias: true, alpha: true });
   if (!gl) return;
 
   const oes = gl.getExtension('OES_vertex_array_object');
@@ -37,7 +39,9 @@ async function awaitInit() {
 
     const program = gl.createProgram();
     gl.attachShader(program, vertexShader);
+    gl.deleteShader(vertexShader);
     gl.attachShader(program, fragmentShader);
+    gl.deleteShader(fragmentShader);
     gl.linkProgram(program);
 
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
@@ -63,199 +67,799 @@ async function awaitInit() {
 
   const noopVertexSource = `
 attribute vec4 a_position;
-varying vec2 v_texCoords;
+varying vec2 vTexCoord;
 uniform mat4 MVP;
 
 void main() {
-  gl_Position = a_position * MVP;
-  v_texCoords = (a_position.xy + 1.0) * 0.5;
+  gl_Position = MVP * a_position;
+  vTexCoord = (a_position.xy + 1.0) * 0.5;
 }`;
-
-  const programNoop = createProgram(noopVertexSource, `
-precision mediump float;
-uniform sampler2D u_texture;
-varying vec2 v_texCoords;
-
-void main() {
-  gl_FragColor = texture2D(u_texture, v_texCoords);
-}`);
-
-  /*
- Below is a modified version of crt-mattias, available at:
- https://raw.githubusercontent.com/libretro/slang-shaders/refs/heads/master/crt/shaders/crt-mattias.slang
-*/
 
   // Add new programs here, then for any configurable uniforms add them to shaderKnobs down below.
 
-  const crtVertexSource = `
+  const programs = {
+    /** @type {{name: string, passes: WebGLProgram[], deinit?(): void, step?(prog: WebGLProgram, idx: number): void} | undefined} */
+    __cache: undefined,
+    get ['']() {
+      if (this.__cache?.name === '')
+        return this.__cache;
+      this.deinit();
+
+      const passthrough = createProgram(noopVertexSource, `
 precision mediump float;
-uniform mat4 MVP;
-
-attribute vec4 a_position;
-varying vec2 v_texCoords;
-#define Position a_position
-#define vTexCoord v_texCoords
-
-void main()
-{
-   gl_Position = Position * MVP;
-   vTexCoord = (Position.xy + 1.0) * 0.5;
-}`;
-
-  const programCRT = createProgram(crtVertexSource, `
-precision mediump float;
-
-uniform float CURVATURE;
-uniform float SCANSPEED;
-
-uniform vec2 SourceSize;
-uniform vec2 OutputSize;
-uniform int FrameCount;
-
-uniform sampler2D u_texture;
-uniform float u_time;
-varying vec2 v_texCoords;
-#define Source u_texture
-#define vTexCoord v_texCoords
-
-#define iChannel0 Source
-#define iTime (float(FrameCount) / 60.0)
-#define iResolution (OutputSize.xy)
-#define fragCoord (vTexCoord.xy * OutputSize.xy)
-
-vec3 sample_( sampler2D tex, vec2 tc )
-{
-	vec3 s = pow(texture2D(tex,tc).rgb, vec3(2.2));
-	return s;
-}
-
-vec3 blur(sampler2D tex, vec2 tc, float offs)
-{
-	vec4 xoffs = offs * vec4(-2.0, -1.0, 1.0, 2.0) / iResolution.x;
-	vec4 yoffs = offs * vec4(-2.0, -1.0, 1.0, 2.0) / iResolution.y;
-
-	vec3 color = vec3(0.0, 0.0, 0.0);
-	color += sample_(tex,tc + vec2(xoffs.x, yoffs.x)) * 0.00366;
-	color += sample_(tex,tc + vec2(xoffs.y, yoffs.x)) * 0.01465;
-	color += sample_(tex,tc + vec2(    0.0, yoffs.x)) * 0.02564;
-	color += sample_(tex,tc + vec2(xoffs.z, yoffs.x)) * 0.01465;
-	color += sample_(tex,tc + vec2(xoffs.w, yoffs.x)) * 0.00366;
-
-	color += sample_(tex,tc + vec2(xoffs.x, yoffs.y)) * 0.01465;
-	color += sample_(tex,tc + vec2(xoffs.y, yoffs.y)) * 0.05861;
-	color += sample_(tex,tc + vec2(    0.0, yoffs.y)) * 0.09524;
-	color += sample_(tex,tc + vec2(xoffs.z, yoffs.y)) * 0.05861;
-	color += sample_(tex,tc + vec2(xoffs.w, yoffs.y)) * 0.01465;
-
-	color += sample_(tex,tc + vec2(xoffs.x, 0.0)) * 0.02564;
-	color += sample_(tex,tc + vec2(xoffs.y, 0.0)) * 0.09524;
-	color += sample_(tex,tc + vec2(    0.0, 0.0)) * 0.15018;
-	color += sample_(tex,tc + vec2(xoffs.z, 0.0)) * 0.09524;
-	color += sample_(tex,tc + vec2(xoffs.w, 0.0)) * 0.02564;
-
-	color += sample_(tex,tc + vec2(xoffs.x, yoffs.z)) * 0.01465;
-	color += sample_(tex,tc + vec2(xoffs.y, yoffs.z)) * 0.05861;
-	color += sample_(tex,tc + vec2(    0.0, yoffs.z)) * 0.09524;
-	color += sample_(tex,tc + vec2(xoffs.z, yoffs.z)) * 0.05861;
-	color += sample_(tex,tc + vec2(xoffs.w, yoffs.z)) * 0.01465;
-
-	color += sample_(tex,tc + vec2(xoffs.x, yoffs.w)) * 0.00366;
-	color += sample_(tex,tc + vec2(xoffs.y, yoffs.w)) * 0.01465;
-	color += sample_(tex,tc + vec2(    0.0, yoffs.w)) * 0.02564;
-	color += sample_(tex,tc + vec2(xoffs.z, yoffs.w)) * 0.01465;
-	color += sample_(tex,tc + vec2(xoffs.w, yoffs.w)) * 0.00366;
-
-	return color;
-}
-
-//Canonical noise function; replaced to prevent precision errors
-//float rand(vec2 co){
-//    return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);
-//}
-
-float rand(vec2 co)
-{
-    float a = 12.9898;
-    float b = 78.233;
-    float c = 43758.5453;
-    float dt= dot(co.xy ,vec2(a,b));
-    float sn= mod(dt,3.14);
-    return fract(sin(sn) * c);
-}
-
-vec2 curve(vec2 uv)
-{
-	uv = (uv - 0.5) * 2.0;
-	uv *= 1.1;
-	uv.x *= 1.0 + pow((abs(uv.y) / 5.0), 2.0);
-	uv.y *= 1.0 + pow((abs(uv.x) / 4.0), 2.0);
-	uv  = (uv / 2.0) + 0.5;
-	uv =  uv *0.92 + 0.04;
-	return uv;
-}
-
-void main()
-{
-    vec2 q = fragCoord.xy / iResolution.xy;
-    vec2 uv = q;
-    uv = mix( uv, curve( uv ), CURVATURE );
-    vec3 oricol = texture2D( iChannel0, vec2(q.x,q.y) ).xyz;
-    vec3 col;
-	float x =  sin(0.1*iTime+uv.y*21.0)*sin(0.23*iTime+uv.y*29.0)*sin(0.3+0.11*iTime+uv.y*31.0)*0.0017;
-	float o =2.0*mod(fragCoord.y,2.0)/iResolution.x;
-	x+=o;
-    col.r = 1.0*blur(iChannel0,vec2(uv.x+0.0009,uv.y+0.0009),1.2).x+0.005;
-    col.g = 1.0*blur(iChannel0,vec2(uv.x+0.000,uv.y-0.0015),1.2).y+0.005;
-    col.b = 1.0*blur(iChannel0,vec2(uv.x-0.0015,uv.y+0.000),1.2).z+0.005;
-    col.r += 0.2*blur(iChannel0,vec2(uv.x+0.0009,uv.y+0.0009),2.25).x-0.005;
-    col.g += 0.2*blur(iChannel0,vec2(uv.x+0.000,uv.y-0.0015),1.75).y-0.005;
-    col.b += 0.2*blur(iChannel0,vec2(uv.x-0.0015,uv.y+0.000),1.25).z-0.005;
-    float ghs = 0.05;
-	col.r += ghs*(1.0-0.299)*blur(iChannel0,0.75*vec2(0.01, -0.027)+vec2(uv.x+0.001,uv.y+0.001),7.0).x;
-    col.g += ghs*(1.0-0.587)*blur(iChannel0,0.75*vec2(-0.022, -0.02)+vec2(uv.x+0.000,uv.y-0.002),5.0).y;
-    col.b += ghs*(1.0-0.114)*blur(iChannel0,0.75*vec2(-0.02, -0.0)+vec2(uv.x-0.002,uv.y+0.000),3.0).z;
-
-    col = clamp(col*0.4+0.6*col*col*1.0,0.0,1.0);
-
-    float vig = (0.0 + 1.0*16.0*uv.x*uv.y*(1.0-uv.x)*(1.0-uv.y));
-	vig = pow(vig,0.3);
-	col *= vec3(vig);
-
-    col *= vec3(0.95,1.05,0.95);
-	col = mix( col, col * col, 0.3) * 3.8;
-
-	float scans = clamp( 0.35+0.15*sin(3.5*(iTime * SCANSPEED)+uv.y*iResolution.y*1.5), 0.0, 1.0);
-
-	float s = pow(scans,0.9);
-	col = col*vec3( s) ;
-
-    col *= 1.0+0.0015*sin(300.0*iTime);
-
-	col*=1.0-0.15*vec3(clamp((mod(fragCoord.x+o, 2.0)-1.0)*2.0,0.0,1.0));
-	col *= vec3( 1.0 ) - 0.25*vec3( rand( uv+0.0001*iTime),  rand( uv+0.0001*iTime + 0.3 ),  rand( uv+0.0001*iTime+ 0.5 )  );
-	col = pow(col, vec3(0.45));
-
-	if (uv.x < 0.0 || uv.x > 1.0)
-		col *= 0.0;
-	if (uv.y < 0.0 || uv.y > 1.0)
-		col *= 0.0;
-
-
-    float comp = smoothstep( 0.1, 0.9, sin(iTime) );
-
-    gl_FragColor = vec4(col,1.0);
-}`);
-
-  const programSepia = createProgram(noopVertexSource, `
-precision mediump float;
-uniform sampler2D u_texture;
-varying vec2 v_texCoords;
+uniform sampler2D Source;
+varying vec2 vTexCoord;
 
 void main() {
-  vec2 uv = v_texCoords * 2.0 - 1.0;
-  uv = uv * 0.5 + 0.5;
+  gl_FragColor = texture2D(Source, vTexCoord);
+}`);
 
-  vec4 color = texture2D(u_texture, uv);
+      return this.__cache = {
+        name: '',
+        passes: [passthrough],
+      };
+    },
+    get crt() {
+      if (this.__cache?.name === 'crt')
+        return this.__cache;
+
+      const srgb = gl.getExtension('EXT_sRGB');
+      if (!srgb) throw new Error('crt needs EXT_sRGB');
+      this.deinit();
+
+      /*
+          Hyllian's CRT Shader
+
+          Copyright (C) 2011-2024 Hyllian - sergiogdb@gmail.com
+
+          Permission is hereby granted, free of charge, to any person obtaining a copy
+          of this software and associated documentation files (the "Software"), to deal
+          in the Software without restriction, including without limitation the rights
+          to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+          copies of the Software, and to permit persons to whom the Software is
+          furnished to do so, subject to the following conditions:
+
+          The above copyright notice and this permission notice shall be included in
+          all copies or substantial portions of the Software.
+
+          THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+          IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+          FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+          AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+          LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+          OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+          THE SOFTWARE.
+
+          Below is a modified version of the crt-hyllian-rgb-slotmask preset,
+          shader files can be found at https://github.com/libretro/slang-shaders/tree/master/crt/shaders/hyllian
+      */
+
+      const sharedVertexSource = `
+attribute vec4 a_position;
+varying vec2 vTexCoord;
+uniform mat4 MVP;
+
+void main() {
+  gl_Position = MVP * a_position;
+  vTexCoord = (a_position.xy * 1.0001 + 1.0) * 0.5;
+}`;
+      const pass0 = createProgram(sharedVertexSource, `
+precision mediump float;
+
+varying vec2 vTexCoord;
+uniform sampler2D Source;
+uniform sampler2D SamplerLUT1;
+uniform vec2 SamplerLUT1Size;
+uniform sampler2D SamplerLUT2;
+uniform vec2 SamplerLUT2Size;
+
+uniform float LUT_selector_param;
+
+// This shouldn't be necessary but it seems some undefined values can
+// creep in and each GPU vendor handles that differently. This keeps
+// all values within a safe range
+vec4 mixfix(vec4 a, vec4 b, float c)
+{
+	return (a.z < 1.0) ? mix(a, b, c) : a;
+}
+
+void main()
+{
+	vec4 imgColor = texture2D(Source, vTexCoord.xy);
+
+	if (LUT_selector_param == 0.0) {
+		gl_FragColor = imgColor;
+	}
+	else {
+
+	float LUT_Size = mix(SamplerLUT1Size.y, SamplerLUT2Size.y, LUT_selector_param - 1.0);
+	vec4 color1, color2 = vec4(0.,0.,0.,0.);
+	float red, green, blue1, blue2, mixer = 0.0;
+
+	red = ( imgColor.r * (LUT_Size - 1.0) + 0.4999 ) / (LUT_Size * LUT_Size);
+	green = ( imgColor.g * (LUT_Size - 1.0) + 0.4999 ) / LUT_Size;
+	blue1 = (floor( imgColor.b  * (LUT_Size - 1.0) ) / LUT_Size) + red;
+	blue2 = (ceil( imgColor.b  * (LUT_Size - 1.0) ) / LUT_Size) + red;
+	mixer = clamp(max((imgColor.b - blue1) / (blue2 - blue1), 0.0), 0.0, 32.0);
+
+	if(LUT_selector_param == 1.)
+	{
+   	color1 = texture2D( SamplerLUT1, vec2( blue1, green ));
+   	color2 = texture2D( SamplerLUT1, vec2( blue2, green ));
+	}
+	else
+	{
+		color1 = texture2D( SamplerLUT2, vec2( blue1, green ));
+		color2 = texture2D( SamplerLUT2, vec2( blue2, green ));
+	}
+	gl_FragColor = mixfix(color1, color2, mixer);
+	}
+}`);
+      const pass1 = createProgram(sharedVertexSource, `
+precision mediump float;
+
+uniform float HFILTER_PROFILE;
+uniform float SHARPNESS_HACK;
+uniform float CRT_ANTI_RINGING;
+uniform float CRT_InputGamma;
+uniform float CURVATURE;
+uniform float WARP_X;
+uniform float WARP_Y;
+
+uniform vec2 SourceSize;
+
+#define GAMMA_IN(color)    vec4(pow(color, vec3(CRT_InputGamma, CRT_InputGamma, CRT_InputGamma)), 1.)
+
+/* Curvature code. Credits to torridgristle! */
+#define CRT_Distortion (vec2(WARP_X, 0.) * 15.)
+
+#define SQRT_OF_2  1.4142135623730950488016887242097
+
+// Radius of Convergence = 1.0 - SQRT_OF_2 / 2
+
+#define CONVERGENCE_RADIUS 0.29289321881345247559915563789515
+
+vec2 Warp(vec2 texCoord)
+{
+   vec2 cCoords = texCoord * 2.0 - 1.0;
+   float cCoordsDist = sqrt(cCoords.x * cCoords.x + cCoords.y * cCoords.y);
+   cCoords = cCoords / cCoordsDist;
+   cCoords = cCoords * (1.0 - pow(vec2(1.0 - (cCoordsDist/SQRT_OF_2)),(1.0/(1.0+CRT_Distortion*0.2))));
+   cCoords = cCoords / (1.0-pow(vec2(CONVERGENCE_RADIUS),(1.0/(vec2(1.0)+CRT_Distortion*0.2))));
+   cCoords = cCoords * 0.5 + 0.5;
+
+   return cCoords;
+}
+
+// Horizontal cubic filter.
+// Some known filters use these values:
+
+//    B = 0.5, C = 0.0        =>  A sharp almost gaussian filter.
+//    B = 0.0, C = 0.0        =>  Hermite cubic filter.
+//    B = 1.0, C = 0.0        =>  Cubic B-Spline filter.
+//    B = 0.0, C = 0.5        =>  Catmull-Rom Spline filter.
+//    B = C = 1.0/3.0         =>  Mitchell-Netravali cubic filter.
+//    B = 0.3782, C = 0.3109  =>  Robidoux filter.
+//    B = 0.2620, C = 0.3690  =>  Robidoux Sharp filter.
+
+// For more info, see: http://www.imagemagick.org/Usage/img_diagrams/cubic_survey.gif
+
+mat4 get_hfilter_profile()
+{
+    float bf = 0.0;
+    float cf = 0.0;
+
+    if (HFILTER_PROFILE > 0.5) {bf = 0.0; cf = 0.5;}
+
+    return mat4( (          -bf - 6.0*cf)/6.0,         (3.0*bf + 12.0*cf)/6.0, (-3.0*bf - 6.0*cf)/6.0,             bf/6.0,
+                 (12.0 - 9.0*bf - 6.0*cf)/6.0, (-18.0 + 12.0*bf + 6.0*cf)/6.0,                    0.0, (6.0 - 2.0*bf)/6.0,
+                -(12.0 - 9.0*bf - 6.0*cf)/6.0, (18.0 - 15.0*bf - 12.0*cf)/6.0,  (3.0*bf + 6.0*cf)/6.0,             bf/6.0,
+                 (           bf + 6.0*cf)/6.0,                            -cf,                    0.0,                0.0);
+}
+
+varying vec2 vTexCoord;
+uniform sampler2D Source;
+#define texture texture2D
+
+void main()
+{
+    vec2 texture_size = vec2(SHARPNESS_HACK*SourceSize.x, SourceSize.y);
+
+    vec2 dx = vec2(1.0/texture_size.x, 0.0);
+
+    vec2 WarpedTexCoord = vTexCoord.xy;
+
+    WarpedTexCoord = (CURVATURE > 0.5) ? Warp(WarpedTexCoord) : WarpedTexCoord;
+
+    vec2 pix_coord = WarpedTexCoord.xy*texture_size + vec2(-0.5, 0.0);
+
+    vec2 tc = (floor(pix_coord) + vec2(0.5,0.5))/texture_size;
+
+    vec2 fp = fract(pix_coord);
+
+    vec4 c10 = GAMMA_IN(texture(Source, tc     - dx).xyz);
+    vec4 c11 = GAMMA_IN(texture(Source, tc         ).xyz);
+    vec4 c12 = GAMMA_IN(texture(Source, tc     + dx).xyz);
+    vec4 c13 = GAMMA_IN(texture(Source, tc + 2.0*dx).xyz);
+
+    mat4 color_matrix = mat4(c10, c11, c12, c13);
+
+    mat4 invX    = get_hfilter_profile();
+    vec4 lobes   = vec4(fp.x*fp.x*fp.x, fp.x*fp.x, fp.x, 1.0);
+    vec4 invX_Px = lobes * invX;
+    vec3 color   = (color_matrix * invX_Px).xyz;
+
+    // Anti-ringing
+    //  Get min/max samples
+    vec3 min_sample = min(c11,c12).xyz;
+    vec3 max_sample = max(c11,c12).xyz;
+
+    vec3 aux = color;
+    color = clamp(color, min_sample, max_sample);
+    color = mix(aux, color, CRT_ANTI_RINGING);
+
+    gl_FragColor = vec4(color, 1.0);
+}`);
+
+      const pass2 = createProgram(sharedVertexSource, `
+precision highp float;
+
+uniform vec2 SourceSize;
+uniform vec4 OriginalSize;
+uniform vec2 OutputSize;
+
+uniform float CRT_OutputGamma;
+uniform float PHOSPHOR_LAYOUT;
+uniform float MASK_INTENSITY;
+uniform float MONITOR_SUBPIXELS;
+uniform float BRIGHTBOOST;
+uniform float SCANLINES_SHAPE;
+uniform float SCANLINES_STRENGTH;
+uniform float BEAM_MIN_WIDTH;
+uniform float BEAM_MAX_WIDTH;
+uniform float POST_BRIGHTNESS;
+uniform float CURVATURE;
+uniform float WARP_X;
+uniform float WARP_Y;
+uniform float CORNER_SIZE;
+uniform float CORNER_SMOOTHNESS;
+
+#define BRIGHTBOOST_p (BRIGHTBOOST+1.1)
+#define SCANLINES_STRENGTH_p (-0.16*SCANLINES_SHAPE+SCANLINES_STRENGTH)
+#define CORNER_SMOOTHNESS_p (80.0*pow(CORNER_SMOOTHNESS,10.0))
+
+#define GAMMA_OUT(color)   pow(color, vec3(1.0 / CRT_OutputGamma, 1.0 / CRT_OutputGamma, 1.0 / CRT_OutputGamma))
+
+varying vec2 vTexCoord;
+uniform sampler2D Source;
+
+#define corner_aspect vec2(1., 0.75)
+#define texture texture2D
+
+float corner(vec2 coord)
+{
+    coord = (coord - vec2(0.5)) + vec2(0.5, 0.5);
+    coord = min(coord, vec2(1.0) - coord) * corner_aspect;
+    vec2 cdist = vec2(CORNER_SIZE);
+    coord = (cdist - min(coord, cdist));
+    float dist = sqrt(dot(coord, coord));
+
+    return clamp((cdist.x - dist)*CORNER_SMOOTHNESS_p, 0.0, 1.0);
+}
+
+/* Curvature code. Credits to torridgristle! */
+#define CRT_Distortion (vec2(0.0, WARP_Y) * 15.)
+
+#define SQRT_OF_2  1.4142135623730950488016887242097
+
+// Radius of Convergence = 1.0 - SQRT_OF_2 / 2
+
+#define CONVERGENCE_RADIUS 0.29289321881345247559915563789515
+
+vec2 Warp(vec2 texCoord)
+{
+   vec2 cCoords = texCoord * 2.0 - 1.0;
+   float cCoordsDist = sqrt(cCoords.x * cCoords.x + cCoords.y * cCoords.y);
+   cCoords = cCoords / cCoordsDist;
+   cCoords = cCoords * (1.0 - pow(vec2(1.0 - (cCoordsDist/SQRT_OF_2)),(1.0/(1.0+CRT_Distortion*0.2))));
+   cCoords = cCoords / (1.0-pow(vec2(CONVERGENCE_RADIUS),(1.0/(vec2(1.0)+CRT_Distortion*0.2))));
+   cCoords = cCoords * 0.5 + 0.5;
+
+   return cCoords;
+}
+
+int imod(int a, int b) {
+  return int(floor(mod(float(a), float(b))));
+}
+
+int iabs(int value) {
+  return value < 0 ? -value : value;
+}
+
+/* Mask code pasted from subpixel_masks.h. Masks 3 and 4 added. */
+vec3 mask_weights(vec2 coord, float mask_intensity, int phosphor_layout, float monitor_subpixels){
+   vec3 weights = vec3(1.,1.,1.);
+   float on = 1.;
+   float off = 1.-mask_intensity;
+   vec3 red     = monitor_subpixels==1.0 ? vec3(on,  off, off) : vec3(off, off, on );
+   vec3 green   = vec3(off, on,  off);
+   vec3 blue    = monitor_subpixels==1.0 ? vec3(off, off, on ) : vec3(on,  off, off);
+   vec3 magenta = vec3(on,  off, on );
+   vec3 yellow  = monitor_subpixels==1.0 ? vec3(on,  on,  off) : vec3(off, on,  on );
+   vec3 cyan    = monitor_subpixels==1.0 ? vec3(off, on,  on ) : vec3(on,  on,  off);
+   vec3 black   = vec3(off, off, off);
+   vec3 white   = vec3(on,  on,  on );
+   int w, z = 0;
+
+   // This pattern is used by a few layouts, so we'll define it here
+   vec3 aperture_weights = mix(magenta, green, floor(mod(coord.x, 2.0)));
+
+   if(phosphor_layout == 0) return weights;
+
+   else if(phosphor_layout == 1){
+      // classic aperture for RGB panels; good for 1080p, too small for 4K+
+      // aka aperture_1_2_bgr
+      weights  = aperture_weights;
+      return weights;
+   }
+
+   else if(phosphor_layout == 2){
+      // Classic RGB layout; good for 1080p and lower
+      // vec3 bw3[3] = vec3[3](red, green, blue);
+//      vec3 bw3[3] = vec3[](black, yellow, blue);
+
+      z = int(floor(mod(coord.x, 3.0)));
+
+      // weights = bw3[z];
+      // return weights;
+      if (z == 0) return red;
+      else if (z == 1) return green;
+      else return blue;
+   }
+
+   else if(phosphor_layout == 3){
+      // black and white aperture; good for weird subpixel layouts and low brightness; good for 1080p and lower
+      // vec3 bw3[3];
+      // bw3[0] = black;
+      // bw3[1] = white;
+      // bw3[2] = black;
+
+      z = int(floor(mod(coord.x, 3.0)));
+
+      // weights = bw3[z];
+      // return weights;
+      return z == 1 ? white : black;
+   }
+
+   else if(phosphor_layout == 4){
+      // reduced TVL aperture for RGB panels. Good for 4k.
+      // aperture_2_4_rgb
+
+      w = int(floor(mod(coord.x, 4.0)));
+
+      // weights = big_ap_rgb[w];
+      // return weights;
+      if (z == 0) return red;
+      else if (z == 1) return yellow;
+      else if (z == 2) return cyan;
+      else return blue;
+   }
+
+   else if(phosphor_layout == 5){
+      // black and white aperture; good for weird subpixel layouts and low brightness; good for 4k
+      // vec3 bw4[4] = vec3[4](black, black, white, white);
+
+      z = int(floor(mod(coord.x, 4.0)));
+
+      // weights = bw4[z];
+      return z > 1 ? white : black;
+   }
+
+   else if(phosphor_layout == 6){
+      // aperture_1_4_rgb; good for simulating lower
+
+      z = int(floor(mod(coord.x, 4.0)));
+
+      if (z == 0) return red;
+      else if (z == 1) return green;
+      else if (z == 2) return blue;
+      else return black;
+   }
+
+   else if(phosphor_layout == 7){
+      // 2x2 shadow mask for RGB panels; good for 1080p, too small for 4K+
+      // aka delta_1_2x1_bgr
+      vec3 inverse_aperture = mix(green, magenta, floor(mod(coord.x, 2.0)));
+      weights               = mix(aperture_weights, inverse_aperture, floor(mod(coord.y, 2.0)));
+      return weights;
+   }
+
+   else if(phosphor_layout == 8){
+      // delta_2_4x1_rgb
+      // vec3 delta[8];
+      // delta[0] = red;
+      // delta[1] = yellow;
+      // delta[2] = cyan;
+      // delta[3] = blue;
+      // delta[4] = cyan;
+      // delta[5] = blue;
+      // delta[6] = red;
+      // delta[7] = yellow;
+
+      w = int(floor(mod(coord.y, 2.0)));
+      z = int(floor(mod(coord.x, 4.0)));
+      int f = w * 4 + z;
+
+      if (f > 1 && f < 6)
+        return imod(f, 2) == 0 ? cyan : blue;
+      else
+        return imod(f, 2) == 0 ? red : yellow;
+   }
+
+   else if(phosphor_layout == 9){
+      // delta_1_4x1_rgb; dunno why this is called 4x1 when it's obviously 4x2 /shrug
+      // vec3 delta1[2][4] = vec3[][](
+      //    vec3[](red,  green, blue, black),
+      //    vec3[](blue, black, red,  green)
+      // );
+
+      w = int(floor(mod(coord.y, 2.0)));
+      z = int(floor(mod(coord.x, 4.0)));
+      int f = w * 4 + z;
+
+      if (f > 1 && f < 6)
+        return imod(f, 2) == 0 ? blue : black;
+      else
+        return imod(f, 2) == 0 ? red : green;
+   }
+
+   else if(phosphor_layout == 10){
+      // delta_2_4x2_rgb
+      // vec3 delta[4][4] = vec3[][](
+      //    vec3[](red,  yellow, cyan, blue),
+      //    vec3[](red,  yellow, cyan, blue),
+      //    vec3[](cyan, blue,   red,  yellow),
+      //    vec3[](cyan, blue,   red,  yellow)
+      // );
+
+      w = int(floor(mod(coord.y, 4.0)));
+      z = int(floor(mod(coord.x, 4.0)));
+
+      if (iabs(w-z) < 2) {
+        if (z == w) return yellow;
+        else return z > w ? yellow : red;
+      } else {
+        if (z == w) return blue;
+        else return z > w ? blue : cyan;
+      }
+   }
+
+   else if(phosphor_layout == 11){
+      // slot mask for RGB panels; looks okay at 1080p, looks better at 4K
+      // vec3 slotmask[4][6] = vec3[][](
+      //    vec3[](red, green, blue,    red, green, blue),
+      //    vec3[](red, green, blue,  black, black, black),
+      //    vec3[](red, green, blue,    red, green, blue),
+      //    vec3[](black, black, black, red, green, blue)
+      // );
+
+      w = int(floor(mod(coord.y, 4.0)));
+      z = int(floor(mod(coord.x, 6.0)));
+
+      if (w == 1 && z >= 3) return black;
+      if (w == 3 && z <= 2) return black;
+
+      int f = imod(z, 3);
+      if (f == 0) return red;
+      else if (f == 1) return green;
+      else return blue;
+   }
+
+   else if(phosphor_layout == 12){
+      // slot mask for RGB panels; looks okay at 1080p, looks better at 4K
+      // vec3 slotmask[4][6] = vec3[][](
+      //    vec3[](black,  white, black,   black,  white, black),
+      //    vec3[](black,  white, black,  black, black, black),
+      //    vec3[](black,  white, black,  black,  white, black),
+      //    vec3[](black, black, black,  black,  white, black)
+      // );
+
+      w = int(floor(mod(coord.y, 4.0)));
+      z = int(floor(mod(coord.x, 6.0)));
+
+      if (w == 1 && z >= 3) return black;
+      if (w == 3 && z <= 2) return black;
+
+      int f = imod(z, 3);
+      return f == 1 ? white : black;
+   }
+
+   else if(phosphor_layout == 13){
+      // based on MajorPainInTheCactus' HDR slot mask
+      // vec3 slot[4][8] = vec3[][](
+      //    vec3[](red,   green, blue,  black, red,   green, blue,  black),
+      //    vec3[](red,   green, blue,  black, black, black, black, black),
+      //    vec3[](red,   green, blue,  black, red,   green, blue,  black),
+      //    vec3[](black, black, black, black, red,   green, blue,  black)
+      // );
+
+      w = int(floor(mod(coord.y, 4.0)));
+      z = int(floor(mod(coord.x, 8.0)));
+
+      // weights = slot[w * 8 + z];
+      // return weights;
+      if (w == 1 && z >= 4) return black;
+      if (w == 3 && z <= 3) return black;
+
+      int f = imod(z, 4);
+      if (f == 0) return red;
+      else if (f == 1) return green;
+      else if (f == 2) return blue;
+      else return black;
+   }
+
+   else if(phosphor_layout == 14){
+      // same as above but for RGB panels
+      // vec3 slot2[4][10] = vec3[][](
+      //    vec3[](red,   yellow, green, blue,  blue,  red,   yellow, green, blue,  blue ),
+      //    vec3[](black, green,  green, blue,  blue,  red,   red,    black, black, black),
+      //    vec3[](red,   yellow, green, blue,  blue,  red,   yellow, green, blue,  blue ),
+      //    vec3[](red,   red,    black, black, black, black, green,  green, blue,  blue)
+      // );
+
+      // w = int(floor(mod(coord.y, 4.0)));
+      // z = int(floor(mod(coord.x, 10.0)));
+
+      // weights = slot2[w * 10 + z];
+      // return weights;
+      // TODO
+      return weights;
+   }
+
+   else if(phosphor_layout == 15){
+      // slot_3_7x6_rgb
+      // vec3 slot[6][14] = vec3[][](
+      //    vec3[](red,   red,   yellow, green, cyan,  blue,  blue,  red,   red,   yellow, green,  cyan,  blue,  blue),
+      //    vec3[](red,   red,   yellow, green, cyan,  blue,  blue,  red,   red,   yellow, green,  cyan,  blue,  blue),
+      //    vec3[](red,   red,   yellow, green, cyan,  blue,  blue,  black, black, black,  black,  black, black, black),
+      //    vec3[](red,   red,   yellow, green, cyan,  blue,  blue,  red,   red,   yellow, green,  cyan,  blue,  blue),
+      //    vec3[](red,   red,   yellow, green, cyan,  blue,  blue,  red,   red,   yellow, green,  cyan,  blue,  blue),
+      //    vec3[](black, black, black,  black, black, black, black, black, red,   red,    yellow, green, cyan,  blue)
+      // );
+      // vec3 slot[84];
+
+      w = int(floor(mod(coord.y, 6.0)));
+      z = int(floor(mod(coord.x, 14.0)));
+      if (w == 2 && z >= 7) return black;
+      if (w == 5 && z <= 6) return black;
+
+      int f = imod(z, 4);
+      if (f == 0) return red;
+      else if (f == 1) return green;
+      else if (f == 2) return blue;
+      else return black;
+
+   }
+
+   else return weights;
+}
+
+#define pi    3.1415926535897932384626433832795
+#define wa    (0.5*pi)
+#define wb    (pi)
+
+vec3 resampler3(vec3 x)
+{
+    vec3 res;
+
+    res.x = (x.x<=0.001) ?  1.0  :  sin(x.x*wa)*sin(x.x*wb)/(wa*wb*x.x*x.x);
+    res.y = (x.y<=0.001) ?  1.0  :  sin(x.y*wa)*sin(x.y*wb)/(wa*wb*x.y*x.y);
+    res.z = (x.z<=0.001) ?  1.0  :  sin(x.z*wa)*sin(x.z*wb)/(wa*wb*x.z*x.z);
+
+    return res;
+}
+
+vec3 get_scanlines(vec3 d0, vec3 d1, vec3 color0, vec3 color1)
+{
+    if (SCANLINES_SHAPE > 0.5) {
+        d0 = exp(-16.0*d0*d0);
+        d1 = exp(-16.0*d1*d1);
+    }
+    else {
+        d0 = clamp(2.0*d0, 0.0, 1.0);
+        d1 = clamp(2.0*d1, 0.0, 1.0);
+        d0 = resampler3(d0);
+        d1 = resampler3(d1);
+    }
+
+    return (color0*d0+color1*d1);
+}
+
+void main()
+{
+    vec2 texture_size = SourceSize.xy;
+
+    vec3 color;
+    vec2 dy = vec2(0.0, 1.0/texture_size.y);
+
+    vec2 WarpedTexCoord = vTexCoord.xy;
+
+    WarpedTexCoord = (CURVATURE > 0.5) ? Warp(WarpedTexCoord) : WarpedTexCoord;
+
+    vec2 pix_coord = WarpedTexCoord.xy*texture_size + vec2(0.0, -0.5);
+
+    vec2 tc = (floor(pix_coord)+vec2(0.5,0.5))/texture_size;
+
+    vec2 fp = fract(pix_coord);
+
+    vec3 color0 = texture(Source, tc     ).xyz;
+    vec3 color1 = texture(Source, tc + dy).xyz;
+
+    float pos0 = fp.y;
+    float pos1 = 1. - fp.y;
+
+    vec3 lum0 = mix(vec3(BEAM_MIN_WIDTH), vec3(BEAM_MAX_WIDTH), color0);
+    vec3 lum1 = mix(vec3(BEAM_MIN_WIDTH), vec3(BEAM_MAX_WIDTH), color1);
+
+    vec3 d0 = SCANLINES_STRENGTH_p*pos0/(lum0*lum0+0.0000001);
+    vec3 d1 = SCANLINES_STRENGTH_p*pos1/(lum1*lum1+0.0000001);
+
+    color  = BRIGHTBOOST_p*get_scanlines(d0, d1, color0, color1);
+
+    color  = GAMMA_OUT(color);
+
+    vec2 mask_coords =vTexCoord.xy * OutputSize.xy;
+
+    color.rgb*=GAMMA_OUT(mask_weights(mask_coords, MASK_INTENSITY, int(PHOSPHOR_LAYOUT), MONITOR_SUBPIXELS));
+
+    gl_FragColor = vec4(POST_BRIGHTNESS*color, 1.0);
+
+    gl_FragColor *= (CURVATURE > 0.5) ? corner(WarpedTexCoord) : 1.0;
+}`);
+
+      function loadTexture(url) {
+        const texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+
+        // Because images have to be downloaded over the internet
+        // they might take a moment until they are ready.
+        // Until then put a single pixel in the texture so we can
+        // use it immediately. When the image has finished downloading
+        // we'll update the texture with the contents of the image.
+        const level = 0;
+        const internalFormat = gl.RGBA;
+        const width = 1;
+        const height = 1;
+        const border = 0;
+        const srcFormat = gl.RGBA;
+        const srcType = gl.UNSIGNED_BYTE;
+        const pixel = new Uint8Array([0, 0, 255, 255]); // opaque blue
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          level,
+          internalFormat,
+          width,
+          height,
+          border,
+          srcFormat,
+          srcType,
+          pixel,
+        );
+
+        const image = new Image();
+        image.onload = () => {
+          gl.bindTexture(gl.TEXTURE_2D, texture);
+          gl.texImage2D(
+            gl.TEXTURE_2D,
+            level,
+            internalFormat,
+            srcFormat,
+            srcType,
+            image,
+          );
+
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        };
+        image.src = url;
+
+        return { texture, image };
+      }
+      const samplerLUT1 = loadTexture(GM_getResourceURL('guestLUT'));
+      const samplerLUT2 = loadTexture(GM_getResourceURL('hyllianLUT'));
+
+
+      function createFramebuffer(width, height, format = srgb.SRGB_ALPHA_EXT) {
+        const fbtex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, fbtex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, format, width, height, 0, srgb.SRGB_ALPHA_EXT, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+        const fb = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, fbtex, 0);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+        return { fb, fbtex, width, height };
+      }
+
+      const { fb: fb1, fbtex: fbtex1, ...fb1dim } = createFramebuffer(gl.drawingBufferWidth, gl.drawingBufferHeight);
+      const { fb: fb2, fbtex: fbtex2, ...fb2dim } = createFramebuffer(gl.drawingBufferWidth, gl.drawingBufferHeight);
+
+      return this.__cache = {
+        name: 'crt',
+        passes: [pass0, pass1, pass2],
+        deinit() {
+          gl.deleteTexture(samplerLUT1.texture);
+          gl.deleteTexture(samplerLUT2.texture);
+          gl.deleteFramebuffer(fb1);
+          gl.deleteTexture(fbtex1);
+          gl.deleteFramebuffer(fb2);
+          gl.deleteTexture(fbtex2);
+        },
+        step(pass, idx) {
+          switch (idx) {
+            case 0:
+              gl.bindFramebuffer(gl.FRAMEBUFFER, fb1);
+              gl.viewport(0, 0, fb1dim.width, fb1dim.height);
+
+              applyUniforms(pass, 'crt', 'LUT_selector_param');
+              gl.activeTexture(gl.TEXTURE2);
+              gl.bindTexture(gl.TEXTURE_2D, samplerLUT1.texture);
+              gl.uniform1i(gl.getUniformLocation(pass, 'SamplerLUT1'), 2);
+              gl.uniform2f(gl.getUniformLocation(pass, 'SamplerLUT1Size'), samplerLUT1.image.width, samplerLUT1.image.height);
+              gl.activeTexture(gl.TEXTURE3);
+              gl.bindTexture(gl.TEXTURE_2D, samplerLUT2.texture);
+              gl.uniform1i(gl.getUniformLocation(pass, 'SamplerLUT2'), 3);
+              gl.uniform2f(gl.getUniformLocation(pass, 'SamplerLUT2Size'), samplerLUT2.image.width, samplerLUT2.image.height);
+              gl.activeTexture(gl.TEXTURE0);
+              break;
+            case 1:
+              gl.bindFramebuffer(gl.FRAMEBUFFER, fb2);
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, fbtex1);
+              gl.viewport(0, 0, fb2dim.width, fb2dim.height);
+
+              gl.uniform2f(gl.getUniformLocation(pass, 'SourceSize'), fb1dim.width, fb1dim.height);
+              applyUniforms(pass, 'crt',
+                'HFILTER_PROFILE', 'CRT_ANTI_RINGING', 'SHARPNESS_HACK',
+                'CRT_InputGamma', 'CURVATURE', 'WARP_X', 'WARP_Y');
+              break;
+            case 2:
+              gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, fbtex2);
+              gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+
+              gl.uniform2f(gl.getUniformLocation(pass, 'SourceSize'), fb2dim.width, fb2dim.height);
+              gl.uniform2f(gl.getUniformLocation(pass, 'OutputSize'), gl.drawingBufferWidth, gl.drawingBufferHeight);
+              applyUniforms(pass, 'crt',
+                'CRT_OutputGamma', 'PHOSPHOR_LAYOUT', 'MASK_INTENSITY', 'MONITOR_SUBPIXELS',
+                'BRIGHTBOOST', 'BEAM_MIN_WIDTH', 'BEAM_MAX_WIDTH', 'SCANLINES_STRENGTH',
+                'SCANLINES_SHAPE', 'POST_BRIGHTNESS', 'CURVATURE', 'WARP_X', 'WARP_Y',
+                'CORNER_SIZE', 'CORNER_SMOOTHNESS');
+              break;
+          }
+        }
+      };
+    },
+    get sepia() {
+      if (this.__cache?.name === 'sepia')
+        return this.__cache;
+      this.deinit();
+
+      const sepiaPass = createProgram(noopVertexSource, `
+precision mediump float;
+uniform sampler2D Source;
+varying vec2 vTexCoord;
+
+void main() {
+  vec4 color = texture2D(Source, vTexCoord);
 
   // Convert the color to sepia tone
   float r = color.r;
@@ -270,17 +874,45 @@ void main() {
   // Set the final color
   gl_FragColor = vec4(newR, newG, newB, 1.0);
 }`);
+      return this.__cache = {
+        name: 'sepia',
+        passes: [sepiaPass],
+      }
+    },
+    deinit() {
+      if (!this.__cache) return;
+      console.warn('deinit', this.__cache.name);
+      for (const pass of this.__cache.passes)
+        gl.deleteProgram(pass);
+      this.__cache.deinit?.();
+      this.__cache = undefined;
+    }
+  }
+
+  /**
+    @template {keyof typeof shaderKnobs} T
+    @param {T} program
+    @param {Array<keyof typeof shaderKnobs[T]>} uniforms
+  */
+  function applyUniforms(pass, program, ...uniforms) {
+    if (!shaderKnobs[program]) return;
+    if (!uniforms.length)
+      uniforms = Object.keys(shaderKnobs[program]);
+    for (const uniform of uniforms)
+      shaderKnobs[program][uniform].initValue(uniform, pass);
+  }
 
   /** See {@linkcode shaderKnobs} for example usage. */
   class Param {
-    constructor(defaultValue, min, max, step, onUpdate = gl.uniform1f.bind(gl)) {
+    constructor(displayName, defaultValue, min, max, step, onUpdate = gl.uniform1f.bind(gl)) {
+      this.displayName = displayName;
       this.defaultValue = defaultValue;
       this.min = min;
       this.max = max;
       this.step = step;
       this.onUpdate = onUpdate;
     }
-    initValue(name, reset = false) {
+    initValue(name, pass = undefined, reset = false) {
       const activeProgram = shaderConfig.active;
       if (shaderKnobs[activeProgram][name] !== this)
         return;
@@ -293,9 +925,12 @@ void main() {
         if (input)
           input.value = value;
       }
-      this.onUpdate(gl.getUniformLocation(shaderPrograms[activeProgram], name), value);
+      if (!pass && programs[activeProgram])
+        pass = programs[activeProgram].passes[0];
+      if (pass)
+        this.onUpdate(gl.getUniformLocation(pass, name), value);
     }
-    init($parent, name, program, configNamespace) {
+    init($parent, name, configNamespace) {
       let value = shaderConfig.params[shaderConfig.active][name];
       if (typeof value !== 'number')
         value = this.defaultValue;
@@ -310,32 +945,60 @@ void main() {
       input.value = value;
       input.oninput = (ev) => {
         shaderConfig.params[configNamespace][name] = +ev.target.value;
-        this.onUpdate(gl.getUniformLocation(program, name), +ev.target.value);
+        // for (const pass of program.passes)
+        //   this.onUpdate(gl.getUniformLocation(pass, name), +ev.target.value)
+        // this.onUpdate(gl.getUniformLocation(program, name), +ev.target.value);
         debouncedSaveConfig();
       };
 
       const row = document.createElement('li');
       row.classList.add('formControlRow');
-      row.insertAdjacentHTML('afterbegin', `<label class="unselectable" for="${name}">${name}</label>`);
+      row.classList.toggle('indent', (this.displayName || name).startsWith(' '));
+      row.insertAdjacentHTML('afterbegin', `<label class="unselectable" for="${name}">${this.displayName || name}</label>`);
       row.appendChild(input)
       $parent.appendChild(row);
       return row;
     }
   }
 
-  // TODO: Allow enabling multiple shaders at the same time + change orders
-  const shaderPrograms = {
-    crt: programCRT,
-    sepia: programSepia,
+  class ParamSection extends Param {
+    constructor(displayName) {
+      super(displayName);
+    }
+    initValue() { }
+    init($parent, name, _program, _ns) {
+      const row = document.createElement('li');
+      row.classList.add('formControlRow');
+      row.insertAdjacentHTML('afterbegin', `<label class="unselectable" for="${name}">${this.displayName || name}</label>`);
+      $parent.appendChild(row);
+      return row;
+    }
   }
-
 
   const shaderKnobs = {
     '': {},
     crt: {
-      OutputSize: new Param(80, 10, 180, 5, (loc, value) => gl.uniform2f(loc, 20 * value, 15 * value)),
-      CURVATURE: new Param(0.5, 0, 1, 0.05),
-      SCANSPEED: new Param(1, 0, 10, 0.5),
+      LUT_selector_param: new Param('LUT [ Off | NTSC | Grade ]', 2, 0, 2, 1),
+      CRT_HYLLIAN: new ParamSection('[CRT-HYLLIAN PARAMS]'),
+      HFILTER_PROFILE: new Param("HORIZONTAL FILTER PROFILE [ SHARP1 | SHARP2 ]", 0, 0.0, 1.0, 1.0),
+      CRT_ANTI_RINGING: new Param("ANTI RINGING", 1.0, 0.0, 1.0, 1.0),
+      SHARPNESS_HACK: new Param("SHARPNESS_HACK", 1.0, 1.0, 4.0, 1.0),
+      CRT_InputGamma: new Param("INPUT GAMMA", 2.4, 1.0, 5.0, 0.1),
+      CRT_OutputGamma: new Param("OUTPUT GAMMA", 2.2, 1.0, 5.0, 0.05),
+      PHOSPHOR_LAYOUT: new Param("PHOSPHOR LAYOUT [1-6 Aperture, 7-10 Shadow, 11-14 Slot]", 11.0, 0.0, 15.0, 1.0),
+      MASK_INTENSITY: new Param("MASK INTENSITY", 0.65, 0.0, 1.0, 0.01),
+      MONITOR_SUBPIXELS: new Param("MONITOR SUBPIXELS LAYOUT [0=RGB, 1=BGR]", 0.0, 0.0, 1.0, 1.0),
+      BRIGHTBOOST: new Param("BRIGHTNESS BOOST", 1.3, 1.0, 3.0, 0.05),
+      BEAM_MIN_WIDTH: new Param("MIN BEAM WIDTH", 0.65, 0.0, 1.0, 0.02),
+      BEAM_MAX_WIDTH: new Param("MAX BEAM WIDTH", 1.0, 0.0, 1.0, 0.02),
+      SCANLINES_STRENGTH: new Param("SCANLINES STRENGTH", 0.55, 0.0, 1.0, 0.01),
+      SCANLINES_SHAPE: new Param("SCANLINES SHAPE (SINC | GAUSSIAN)", 0.0, 0.0, 1.0, 1.0),
+      POST_BRIGHTNESS: new Param("POST-BRIGHTNESS", 1.00, 1.0, 3.0, 0.05),
+      CURVATURE: new Param("ENABLE CURVATURE", 1, 0.0, 1.0, 1.0),
+      WARP_X: new Param(" CURVATURE-X", 0.02, 0.0, 0.125, 0.005),
+      WARP_Y: new Param(" CURVATURE-Y", 0.025, 0.0, 0.125, 0.005),
+      CORNER_SIZE: new Param(" CORNER SIZE", 0.025, 0.001, 1.0, 0.005),
+      CORNER_SMOOTHNESS: new Param(" CORNER SMOOTHNESS", 1.08, 1.0, 2.2, 0.02),
     },
     sepia: {}
   }
@@ -347,7 +1010,7 @@ void main() {
   };
 
   loadOrInitConfig(shaderConfig, true, 'shader');
-  // @ts-expect-error
+  // // @ts-expect-error
   if (shaderConfig.active === true) {
     shaderConfig.active = 'crt';
     updateConfig(shaderConfig, true, 'shader');
@@ -375,38 +1038,53 @@ void main() {
   let programChanged = false;
   function applyShader() {
     programChanged = false;
-    const prog = shaderPrograms[shaderConfig.active] || programNoop;
-    if (shaderConfig.active && prog === programNoop)
-      showToastMessage(`Invalid shader program ${shaderConfig.active}`, 'important', true, undefined, true);
-    const vao = setupConstantUniforms(prog);
+    const prog = programs[shaderConfig.active] || programs[''];
+    // if (shaderConfig.active && prog === programs[''])
+    //   showToastMessage(`Invalid shader program ${shaderConfig.active}`, 'important', true, undefined, true);
+    let vao;
+    for (const pass of prog.passes) {
+      vao = setupConstantUniforms(pass, vao);
+      gl.uniform2f(gl.getUniformLocation(pass, 'SourceSize'), gl.drawingBufferWidth, gl.drawingBufferHeight);
+      gl.uniform2f(gl.getUniformLocation(pass, 'OutputSize'), gl.drawingBufferWidth, gl.drawingBufferHeight);
+      gl.enableVertexAttribArray(gl.getAttribLocation(pass, 'a_position'));
 
-    gl.uniform2f(gl.getUniformLocation(prog, 'SourceSize'), 320, 240);
-
-    // const u_time = gl.getUniformLocation(prog, 'u_time');
-    const u_framecount = gl.getUniformLocation(prog, 'FrameCount');
-    for (const [name, param] of Object.entries(shaderKnobs[shaderConfig.active]))
-      param.initValue(name);
-
-    let nframe = 0;
+      // const u_time = gl.getUniformLocation(prog, 'u_time');
+      // const u_framecount = gl.getUniformLocation(prog, 'FrameCount');
+      for (const [name, param] of Object.entries(shaderKnobs[shaderConfig.active]))
+        param.initValue(name, pass);
+    }
+    // let nframe = 0;
     requestAnimationFrame(function drive() {
-      if (programChanged) return;
-      gl.useProgram(prog);
-      oes.bindVertexArrayOES(vao);
-      //gl.uniform1f(u_time, performance.now() / 1000); // Time in seconds
-      gl.uniform1i(u_framecount, nframe++);
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-      oes.bindVertexArrayOES(null);
+      if (programChanged) return programs.deinit();
+
+      // const frameCount = nframe++;
+      let passCount = 0;
+      for (const pass of prog.passes) {
+        gl.useProgram(pass);
+        oes.bindVertexArrayOES(vao);
+        // gl.uniform1i(gl.getUniformLocation(pass, 'FrameCount'), frameCount);
+        prog.step?.(pass, passCount++);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        oes.bindVertexArrayOES(null);
+      }
 
       requestAnimationFrame(drive);
     });
   }
 
+  canvas.addEventListener('resize', () => {
+    programChanged = true;
+    requestAnimationFrame(applyShader);
+  });
+
   /**
    * The boilerplate for most shaders. It performs the following important tasks:
    * 1. Setting up the MVP (model view projection) matrix, necessary for correctly displaying the canvas texture.
    * 2. Setting up the VAO (vertex array object) so that it can be reused when drawing the triangles.
+   * @param {WebGLProgram} prog
+   * @param {WebGLVertexArrayObjectOES} [vao=undefined]
    */
-  function setupConstantUniforms(prog) {
+  function setupConstantUniforms(prog, vao) {
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.useProgram(prog);
 
@@ -418,21 +1096,23 @@ void main() {
       1.0, -1.0
     ]);
 
-    const vao = oes.createVertexArrayOES();
-    oes.bindVertexArrayOES(vao);
-    const vertexBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+    if (!vao) {
+      vao = oes.createVertexArrayOES();
+      oes.bindVertexArrayOES(vao);
+      const vertexBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
 
-    const a_position = gl.getAttribLocation(prog, 'a_position');
-    gl.vertexAttribPointer(a_position, 2, gl.FLOAT, false, 0, 0);
-    gl.enableVertexAttribArray(a_position);
+      const a_position = gl.getAttribLocation(prog, 'a_position');
+      gl.vertexAttribPointer(a_position, 2, gl.FLOAT, false, 0, 0);
+      gl.enableVertexAttribArray(a_position);
 
-    oes.bindVertexArrayOES(null);
-    gl.deleteBuffer(vertexBuffer);
+      oes.bindVertexArrayOES(null);
+      gl.deleteBuffer(vertexBuffer);
+    }
 
-    const u_texture = gl.getUniformLocation(prog, 'u_texture');
-    gl.uniform1i(u_texture, 0); // Assuming texture unit 0
+    const source = gl.getUniformLocation(prog, 'Source');
+    gl.uniform1i(source, 0); // Assuming texture unit 0
 
     const rot180 = [
       -1, 0, 0, 0,
@@ -474,7 +1154,7 @@ void main() {
     shaderModal.classList.add('modal', 'hidden');
     shaderModal.style.opacity = '0.5';
 
-    const shaderChoices = Object.keys(shaderPrograms);
+    const shaderChoices = ['crt', 'sepia'];
     shaderModal.insertAdjacentHTML('afterbegin', `
       <div class="modalHeader">
         <h1 class="modalTitle">Shaders</h1>
@@ -484,7 +1164,7 @@ void main() {
           <li class="formControlRow">
             <label for="shaderEnableButton" class="unselectable">Enable Shaders</label>
             <div>
-              <select id="shaderOptions" size="${Math.min(shaderChoices.length + 1, 5)}">
+              <select id="shaderOptions" size="${Math.min(shaderChoices.length + 1, 4)}">
                 <option value="">(None)</option>
                 ${shaderChoices.map(key => `
                   <option value="${key}">${key}</option>
@@ -503,7 +1183,8 @@ void main() {
       shaderConfig.active = this.value;
       modalFooter.classList.toggle('hidden', !shaderConfig.active);
       updateConfig(shaderConfig, true, 'shader');
-      applyShader();
+      programChanged = true;
+      requestAnimationFrame(applyShader);
 
       initShaderControls();
     };
@@ -512,7 +1193,7 @@ void main() {
     shaderModal.querySelector('#resetShaderButton').onclick = function() {
       if (!shaderConfig.active) return;
       for (const [name, param] of Object.entries(shaderKnobs[shaderConfig.active]))
-        param.initValue(name, true);
+        param.initValue(name, undefined, true);
       updateConfig(shaderConfig, true, 'shader');
     };
     function initShaderControls() {
@@ -522,7 +1203,7 @@ void main() {
       if (!shaderConfig.active)
         return;
       for (const [name, param] of Object.entries(shaderKnobs[shaderConfig.active])) {
-        const row = param.init($formControls, name, shaderPrograms[shaderConfig.active], shaderConfig.active);
+        const row = param.init($formControls, name, shaderConfig.active);
         row.classList.add('js_shader');
       }
     }
