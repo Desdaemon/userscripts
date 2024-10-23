@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         YNO Shaders
 // @namespace    http://tampermonkey.net/
-// @version      1.0.0
+// @version      1.0.1
 // @description  Basic WebGL shaders for YNO
 // @author       Desdaemon
 // @match        https://ynoproject.net/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=ynoproject.net
 // @license      MIT
 // @supportURL   https://github.com/Desdaemon/userscripts
-// @installURL   https://raw.githubusercontent.com/Desdaemon/userscripts/refs/heads/main/greasemonkey/yno/shader.user.js
+// @downloadURL  https://raw.githubusercontent.com/Desdaemon/userscripts/refs/heads/main/greasemonkey/yno/shader.user.js
 // @updateURL    https://raw.githubusercontent.com/Desdaemon/userscripts/refs/heads/main/greasemonkey/yno/shader.user.js
 // @grant        none
 // ==/UserScript==
