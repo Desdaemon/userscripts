@@ -1,0 +1,9 @@
+{
+    "include": ["**/*.js", "**/*.ts"],
+    "compilerOptions": {
+        "noEmit": true,
+        "allowJs": true,
+        "checkJs": true,
+        "target": "esnext",
+    }
+}
