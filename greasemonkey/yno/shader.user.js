@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YNO Shaders
 // @namespace    http://tampermonkey.net/
-// @version      2024-10-22
+// @version      1.0.0
 // @description  Basic WebGL shaders for YNO
 // @author       Desdaemon
 // @match        https://ynoproject.net/*
@@ -71,7 +71,7 @@ void main() {
   v_texCoords = (a_position.xy + 1.0) * 0.5;
 }`;
 
-  const programNoop = createProgram(noopVertexSource, ` 
+  const programNoop = createProgram(noopVertexSource, `
 precision mediump float;
 uniform sampler2D u_texture;
 varying vec2 v_texCoords;
@@ -329,9 +329,11 @@ void main() {
     sepia: programSepia,
   }
 
+
   const shaderKnobs = {
     '': {},
     crt: {
+      OutputSize: new Param(80, 10, 180, 5, (loc, value) => gl.uniform2f(loc, 20 * value, 15 * value)),
       CURVATURE: new Param(0.5, 0, 1, 0.05),
       SCANSPEED: new Param(1, 0, 10, 0.5),
     },
@@ -379,8 +381,6 @@ void main() {
     const vao = setupConstantUniforms(prog);
 
     gl.uniform2f(gl.getUniformLocation(prog, 'SourceSize'), 320, 240);
-    // works best for crt-mattias, change to your liking
-    gl.uniform2f(gl.getUniformLocation(prog, 'OutputSize'), 400 * 4.5, 300 * 4.5);
 
     // const u_time = gl.getUniformLocation(prog, 'u_time');
     const u_framecount = gl.getUniformLocation(prog, 'FrameCount');
@@ -499,7 +499,7 @@ void main() {
       </div>`);
     const shaderOptions = shaderModal.querySelector('#shaderOptions');
     const modalFooter = shaderModal.querySelector('.modalFooter');
-    shaderOptions.onchange = function () {
+    shaderOptions.onchange = function() {
       shaderConfig.active = this.value;
       modalFooter.classList.toggle('hidden', !shaderConfig.active);
       updateConfig(shaderConfig, true, 'shader');
@@ -509,7 +509,7 @@ void main() {
     };
 
     document.getElementById('settingsModal').insertAdjacentElement('afterend', shaderModal);
-    shaderModal.querySelector('#resetShaderButton').onclick = function () {
+    shaderModal.querySelector('#resetShaderButton').onclick = function() {
       if (!shaderConfig.active) return;
       for (const [name, param] of Object.entries(shaderKnobs[shaderConfig.active]))
         param.initValue(name, true);

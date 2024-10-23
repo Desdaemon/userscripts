@@ -2,4 +2,5 @@
 
 ## 2024/10/22
 
-- Added `yno/shader.user.js`
+- Migrated `yno/shader.user.js` from gist
+  - Allow configuring `OutputSize` to resolve differences between browsers
