@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YNO Shaders
 // @namespace    http://tampermonkey.net/
-// @version      1.0.1
+// @version      1.1.0
 // @description  Basic WebGL shaders for YNO
 // @author       Desdaemon
 // @match        https://ynoproject.net/*
@@ -1010,7 +1010,7 @@ void main() {
   };
 
   loadOrInitConfig(shaderConfig, true, 'shader');
-  // // @ts-expect-error
+  // @ts-expect-error
   if (shaderConfig.active === true) {
     shaderConfig.active = 'crt';
     updateConfig(shaderConfig, true, 'shader');
@@ -1039,8 +1039,6 @@ void main() {
   function applyShader() {
     programChanged = false;
     const prog = programs[shaderConfig.active] || programs[''];
-    // if (shaderConfig.active && prog === programs[''])
-    //   showToastMessage(`Invalid shader program ${shaderConfig.active}`, 'important', true, undefined, true);
     let vao;
     for (const pass of prog.passes) {
       vao = setupConstantUniforms(pass, vao);

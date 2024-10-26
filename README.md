@@ -9,9 +9,9 @@ Install by clicking the <kbd>Raw</kbd> button on any of the `*.user.js` scripts.
 
 ## Listing
 ### `yno/shader.user.js`
-**[Install](https://raw.githubusercontent.com/Desdaemon/userscripts/refs/heads/main/greasemonkey/yno/shader.user.js) | Updated: 2024/10/22**
+**[Install](https://raw.githubusercontent.com/Desdaemon/userscripts/refs/heads/main/greasemonkey/yno/shader.user.js) | Updated: 2024/10/25**
 
-![image](https://github.com/user-attachments/assets/9efba9a8-f10e-41d2-a67e-68248ba8cfcc)
+![shader](https://github.com/user-attachments/assets/fe6ce8ee-1815-4763-a73b-5bc79fffdf5d)
 
 WebGL shaders for ynoproject.net. Comes with basic shader implementations sourced from libretro.
 Configuration can be done from the site's Settings > Shaders.
