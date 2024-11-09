@@ -1300,10 +1300,16 @@ void main() {
     });
   }
 
-  canvas.addEventListener('resize', () => {
-    programChanged = true;
-    requestAnimationFrame(applyShader);
-  });
+  function debouncedUpdate() {
+    clearTimeout(debouncedUpdate.handle);
+    debouncedUpdate.handle = setTimeout(() => {
+      programChanged = true;
+      requestAnimationFrame(applyShader);
+    }, 200);
+  }
+  // Chromium has an issue with fullscreen not emitting resize.
+  canvas.addEventListener('resize', debouncedUpdate);
+  canvas.addEventListener('fullscreenchange', debouncedUpdate);
 
   /**
    * The boilerplate for most shaders. It performs the following important tasks:
