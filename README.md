@@ -9,7 +9,7 @@ Install by clicking the <kbd>Raw</kbd> button on any of the `*.user.js` scripts.
 
 ## Listing
 ### `yno/shader.user.js`
-**[Install](https://raw.githubusercontent.com/Desdaemon/userscripts/refs/heads/main/greasemonkey/yno/shader.user.js) | Updated: 2024/10/25**
+**[Install](https://raw.githubusercontent.com/Desdaemon/userscripts/refs/heads/main/greasemonkey/yno/shader.user.js) | Updated: 2024/11/09**
 
 ![shader](https://github.com/user-attachments/assets/fe6ce8ee-1815-4763-a73b-5bc79fffdf5d)
 

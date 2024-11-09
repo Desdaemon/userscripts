@@ -1,5 +1,11 @@
 # Changelog
 
+## 2024/11/09
+
+###### `yno/shader.user.js`
+- Added new `ntsc` filter from `ntsc-320px-svideo` preset
+- Fixed an issue on Chromium browsers not reapplying shaders when changing fullscreen mode
+
 ## 2024/10/25
 
 ###### `yno/shader.user.js`
