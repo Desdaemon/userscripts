@@ -1,5 +1,10 @@
 # Changelog
 
+## 2024/11/09
+
+###### `yno/shader.user.js`
+- Added new `ntsc` filter from `ntsc-320px-svideo` preset
+
 ## 2024/10/25
 
 ###### `yno/shader.user.js`

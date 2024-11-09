@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YNO Shaders
 // @namespace    http://tampermonkey.net/
-// @version      1.1.0
+// @version      1.2.0
 // @description  Basic WebGL shaders for YNO
 // @author       Desdaemon
 // @match        https://ynoproject.net/*
@@ -302,7 +302,7 @@ void main()
 }`);
 
       const pass2 = createProgram(sharedVertexSource, `
-precision highp float;
+precision mediump float;
 
 uniform vec2 SourceSize;
 uniform vec4 OriginalSize;
@@ -771,10 +771,11 @@ void main()
       const samplerLUT2 = loadTexture(GM_getResourceURL('hyllianLUT'));
 
 
-      function createFramebuffer(width, height, format = srgb.SRGB_ALPHA_EXT) {
+      function createFramebuffer(width, height) {
+        const format = srgb.SRGB_ALPHA_EXT;
         const fbtex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, fbtex);
-        gl.texImage2D(gl.TEXTURE_2D, 0, format, width, height, 0, srgb.SRGB_ALPHA_EXT, gl.UNSIGNED_BYTE, null);
+        gl.texImage2D(gl.TEXTURE_2D, 0, format, width, height, 0, format, gl.UNSIGNED_BYTE, null);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -843,6 +844,237 @@ void main()
                 'BRIGHTBOOST', 'BEAM_MIN_WIDTH', 'BEAM_MAX_WIDTH', 'SCANLINES_STRENGTH',
                 'SCANLINES_SHAPE', 'POST_BRIGHTNESS', 'CURVATURE', 'WARP_X', 'WARP_Y',
                 'CORNER_SIZE', 'CORNER_SMOOTHNESS');
+              break;
+          }
+        }
+      };
+    },
+    get ntsc() {
+      if (this.__cache?.name === 'ntsc')
+        return this.__cache;
+      this.deinit();
+
+      const ext = gl.getExtension('OES_texture_half_float');
+      if (!ext) throw new Error('NTSC filter requires OES_texture_half_float');
+
+      const ntscRgbyuv = `
+const mat3 yiq2rgb_mat = mat3(
+   1.0, 0.956, 0.6210,
+   1.0, -0.2720, -0.6474,
+   1.0, -1.1060, 1.7046);
+
+vec3 yiq2rgb(vec3 yiq)
+{
+   return yiq * yiq2rgb_mat;
+}
+
+const mat3 yiq_mat = mat3(
+    0.2989, 0.5870, 0.1140,
+    0.5959, -0.2744, -0.3216,
+    0.2115, -0.5229, 0.3114
+);
+
+vec3 rgb2yiq(vec3 col)
+{
+   return col * yiq_mat;
+}`;
+
+      const pass1 = createProgram(`
+precision mediump float;
+
+attribute vec4 a_position;
+#define Position a_position
+varying vec2 vTexCoord;
+uniform mat4 MVP;
+
+uniform vec2 SourceSize;
+uniform vec2 OutputSize;
+varying vec2 pix_no;
+
+void main()
+{
+   gl_Position = MVP * Position;
+   vec2 TexCoord = (a_position.xy + 1.0) * 0.5;
+   vTexCoord = TexCoord;
+   pix_no = TexCoord * SourceSize.xy * (OutputSize.xy / SourceSize.xy);
+}
+`, `
+precision mediump float;
+
+#define TWO_PHASE
+#define SVIDEO
+
+#define PI 3.14159265
+
+#if defined(TWO_PHASE)
+#define CHROMA_MOD_FREQ (4.0 * PI / 15.0)
+#elif defined(THREE_PHASE)
+#define CHROMA_MOD_FREQ (PI / 3.0)
+#endif
+
+#if defined(COMPOSITE)
+#define SATURATION 1.0
+#define BRIGHTNESS 1.0
+#define ARTIFACTING 1.0
+#define FRINGING 1.0
+#elif defined(SVIDEO)
+#define SATURATION 1.0
+#define BRIGHTNESS 1.0
+#define ARTIFACTING 0.0
+#define FRINGING 0.0
+#endif
+
+#if defined(COMPOSITE) || defined(SVIDEO)
+const mat3 mix_mat = mat3(
+	BRIGHTNESS, FRINGING, FRINGING,
+	ARTIFACTING, 2.0 * SATURATION, 0.0,
+	ARTIFACTING, 0.0, 2.0 * SATURATION
+);
+#endif
+
+${ntscRgbyuv}
+
+varying vec2 vTexCoord;
+varying vec2 pix_no;
+uniform sampler2D Source;
+uniform float FrameCount;
+
+void main()
+{
+  vec3 col = texture2D(Source, vTexCoord).rgb;
+  vec3 yiq = rgb2yiq(col);
+
+  #if defined(TWO_PHASE)
+  float chroma_phase = PI * (mod(pix_no.y, 2.0) + FrameCount);
+  #elif defined(THREE_PHASE)
+  float chroma_phase = 0.6667 * PI * (mod(pix_no.y, 3.0) + FrameCount);
+  #endif
+
+  float mod_phase = chroma_phase + pix_no.x * CHROMA_MOD_FREQ;
+
+  float i_mod = cos(mod_phase);
+  float q_mod = sin(mod_phase);
+
+  yiq.yz *= vec2(i_mod, q_mod); // Modulate.
+  yiq *= mix_mat; // Cross-talk.
+  yiq.yz *= vec2(i_mod, q_mod); // Demodulate.
+  gl_FragColor = vec4(yiq, 1.0);
+}`);
+
+      const pass2 = createProgram(`
+precision mediump float;
+attribute vec4 a_position;
+#define Position a_position
+varying vec2 vTexCoord;
+uniform vec2 SourceSize;
+
+uniform mat4 MVP;
+
+void main()
+{
+   gl_Position = Position;
+   vec2 TexCoord = (a_position.xy + 1.0) * 0.5;
+   vTexCoord = TexCoord - vec2(0.5 / SourceSize.x, 0.0); // Compensate for decimate-by-2.
+}`, `
+precision mediump float;
+
+${ntscRgbyuv}
+
+#define TAPS 32
+uniform float luma_filter[TAPS+1];
+uniform float chroma_filter[TAPS+1];
+
+#define fetch_offset(offset, one_x) \
+   texture2D(Source, vTexCoord + vec2((offset) * (one_x), 0.0)).xyz
+
+#define NTSC_CRT_GAMMA 2.5
+#define NTSC_MONITOR_GAMMA 2.0   
+
+varying vec2 vTexCoord;
+uniform sampler2D Source;
+
+uniform vec2 SourceSize;
+
+void main()
+{
+   float one_x = 1.0 / SourceSize.x;
+  vec3 signal = vec3(0.0);
+  for (int i = 0; i < TAPS; i++)
+  {
+     float offset = float(i);
+
+     vec3 sums = fetch_offset(offset - float(TAPS), one_x) +
+        fetch_offset(float(TAPS) - offset, one_x);
+
+     signal += sums * vec3(luma_filter[i], chroma_filter[i], chroma_filter[i]);
+  }
+  signal += texture2D(Source, vTexCoord).xyz *
+     vec3(luma_filter[TAPS], chroma_filter[TAPS], chroma_filter[TAPS]);
+  vec3 rgb = yiq2rgb(signal);
+  gl_FragColor = vec4(pow(rgb, vec3(NTSC_CRT_GAMMA / NTSC_MONITOR_GAMMA)), 1.0);
+}`);
+
+      let nframes = 0;
+      const lumaFilter = new Float32Array([-0.000174844, -0.000205844, -0.000149453, -0.000051693, 0.000000000, -0.000066171,
+      -0.000245058, -0.000432928, -0.000472644, -0.000252236, 0.000198929, 0.000687058, 0.000944112, 0.000803467,
+        0.000363199, 0.000013422, 0.000253402, 0.001339461, 0.002932972, 0.003983485, 0.003026683, -0.001102056,
+      -0.008373026, -0.016897700, -0.022914480, -0.021642347, -0.008863273, 0.017271957, 0.054921920, 0.098342579,
+        0.139044281, 0.168055832, 0.178571429]);
+
+      const chromaFilter = new Float32Array([0.001384762, 0.001678312, 0.002021715, 0.002420562, 0.002880460, 0.003406879, 0.004004985, 0.004679445,
+        0.005434218, 0.006272332, 0.007195654, 0.008204665, 0.009298238, 0.010473450, 0.011725413, 0.013047155,
+        0.014429548, 0.015861306, 0.017329037, 0.018817382, 0.020309220, 0.021785952, 0.023227857, 0.024614500,
+        0.025925203, 0.027139546, 0.028237893, 0.029201910, 0.030015081, 0.030663170, 0.031134640, 0.031420995, 0.031517031]);
+
+      function createFramebuffer(width, height) {
+        const fbtex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, fbtex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, ext.HALF_FLOAT_OES, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+        const fb = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, fbtex, 0);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+        return { fb, fbtex, width, height };
+      }
+
+      const { fb, fbtex, ...fbdim } = createFramebuffer(1280, gl.drawingBufferHeight)
+
+      return this.__cache = {
+        name: 'ntsc',
+        passes: [pass1, pass2],
+        deinit() {
+          gl.deleteFramebuffer(fb);
+          gl.deleteTexture(fbtex);
+        },
+        step(pass, idx) {
+          if (idx === 0)
+            nframes = (nframes + 1) % 2;
+          gl.uniform1f(gl.getUniformLocation(pass, 'FrameCount'), nframes);
+
+          switch (idx) {
+            case 0:
+              gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+              gl.viewport(0, 0, fbdim.width, fbdim.height);
+
+              gl.uniform2f(gl.getUniformLocation(pass, 'SourceSize'), gl.drawingBufferWidth, gl.drawingBufferHeight);
+              gl.uniform2f(gl.getUniformLocation(pass, 'OutputSize'), fbdim.width, fbdim.height);
+              break;
+            case 1:
+              gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, fbtex);
+              gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+
+              gl.uniform2f(gl.getUniformLocation(pass, 'SourceSize'), fbdim.width, fbdim.height);
+
+              gl.uniform1fv(gl.getUniformLocation(pass, 'luma_filter'), lumaFilter);
+              gl.uniform1fv(gl.getUniformLocation(pass, 'chroma_filter'), chromaFilter);
               break;
           }
         }
@@ -945,9 +1177,6 @@ void main() {
       input.value = value;
       input.oninput = (ev) => {
         shaderConfig.params[configNamespace][name] = +ev.target.value;
-        // for (const pass of program.passes)
-        //   this.onUpdate(gl.getUniformLocation(pass, name), +ev.target.value)
-        // this.onUpdate(gl.getUniformLocation(program, name), +ev.target.value);
         debouncedSaveConfig();
       };
 
@@ -1000,13 +1229,14 @@ void main() {
       CORNER_SIZE: new Param(" CORNER SIZE", 0.025, 0.001, 1.0, 0.005),
       CORNER_SMOOTHNESS: new Param(" CORNER SMOOTHNESS", 1.08, 1.0, 2.2, 0.02),
     },
+    ntsc: {},
     sepia: {}
   }
 
   const shaderConfig = {
     /** @type {'crt' | 'sepia' | undefined} */
     active: 'crt',
-    params: { "": {}, crt: {}, sepia: {} }
+    params: { "": {}, crt: {}, sepia: {}, ntsc: {} }
   };
 
   loadOrInitConfig(shaderConfig, true, 'shader');
@@ -1152,7 +1382,7 @@ void main() {
     shaderModal.classList.add('modal', 'hidden');
     shaderModal.style.opacity = '0.5';
 
-    const shaderChoices = ['crt', 'sepia'];
+    const shaderChoices = ['crt', 'sepia', 'ntsc'];
     shaderModal.insertAdjacentHTML('afterbegin', `
       <div class="modalHeader">
         <h1 class="modalTitle">Shaders</h1>
